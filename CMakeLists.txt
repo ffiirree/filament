@@ -59,7 +59,7 @@ option(FILAMENT_ENABLE_EXCEPTIONS "Enable C++ exceptions" ${FILAMENT_ENABLE_EXCE
 option(FILAMENT_ENABLE_RTTI "Enable C++ RTTI" OFF)
 
 option(FILAMENT_ENABLE_LTO "Enable link-time optimizations if supported by the compiler" OFF)
-option(FILAMENT_SKIP_SAMPLES "Don't build samples" OFF)
+option(FILAMENT_SKIP_SAMPLES "Don't build samples" ON)
 
 option(FILAMENT_SUPPORTS_XCB "Include XCB support in Linux builds" ON)
 
@@ -87,7 +87,7 @@ option(FILAMENT_ENABLE_FGVIEWER "Enable the frame graph viewer" OFF)
 
 option(FILAMENT_USE_ABSEIL_LOGGING "Use Abseil to log, may increase binary size" OFF)
 
-option(FILAMENT_ENABLE_EXPERIMENTAL_GCC_SUPPORT "Enable GCC support (unsupported)" OFF)
+option(FILAMENT_ENABLE_EXPERIMENTAL_GCC_SUPPORT "Enable GCC support (unsupported)" ON)
 
 option(FILAMENT_SUPPORTS_WEBP_TEXTURES "Enable webp texture support for Filament (builds libwebp when ON)" OFF)
 
@@ -95,7 +95,7 @@ option(FILAMENT_SUPPORTS_WEBP_TEXTURES "Enable webp texture support for Filament
 # On the regular filament build (where size is of less concern), we enable GTAO by default.
 option(FILAMENT_DISABLE_GTAO "Disable GTAO" OFF)
 
-option(FILAMENT_BUILD_TESTING "Build tests" ON)
+option(FILAMENT_BUILD_TESTING "Build tests" OFF)
 
 option(FILAMENT_DEBUG_MUTEX "Enable utils::Mutex lock order and deadlock debugging" OFF)
 
