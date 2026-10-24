@@ -11,4 +11,4 @@
 
 ---
 
-Linear tone mapping (i.e. no tone mapping).
+Linear tone mapping (i.e. no tone mapping)

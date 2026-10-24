@@ -10,3 +10,5 @@
 ### Deprecated
 
 ---
+
+No Ambient Occlusion

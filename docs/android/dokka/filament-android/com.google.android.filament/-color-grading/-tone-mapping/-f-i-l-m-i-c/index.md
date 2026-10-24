@@ -11,4 +11,4 @@
 
 ---
 
-Filmic tone mapping, modelled after ACES but applied in sRGB space.
+Filmic tone mapping, modelled after ACES but applied in sRGB space

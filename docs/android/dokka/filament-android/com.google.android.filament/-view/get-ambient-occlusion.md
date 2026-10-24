@@ -17,6 +17,10 @@ Queries the type of ambient occlusion active for this View.
 
 ambient occlusion type.
 
+#### Deprecated
+
+use getAmbientOcclusionOptions() instead
+
 #### See also
 
 | |

@@ -123,6 +123,10 @@ set(FILAMENT_METAL_HANDLE_ARENA_SIZE_IN_MB "8" CACHE STRING
     "Size of the Metal handle arena, default 8."
 )
 
+set(FILAMENT_VULKAN_HANDLE_ARENA_SIZE_IN_MB "8" CACHE STRING
+    "Size of the Vulkan handle arena, default 8."
+)
+
 set(FILAMENT_BACKEND_DEBUG_FLAG "" CACHE STRING
     "A debug flag meant for enabling/disabling backend debugging paths"
 )
@@ -206,7 +210,7 @@ if (NOT FILAMENT_OSMESA_PATH STREQUAL "")
     if (NOT EXISTS ${FILAMENT_OSMESA_PATH}/)
         message(FATAL_ERROR "Cannot find specified OSMesa build directory: ${FILAMENT_OSMESA_PATH}")
     endif()
-    set(FILAMENT_SUPPORTS_OSMESA TRUE)
+    set(FILAMENT_SUPPORTS_OSMESA TRUE CACHE BOOL "Enable OSMesa (headless GL context) for Filament" FORCE)
 endif()
 
 if (LINUX)
@@ -944,7 +948,11 @@ add_subdirectory(${EXTERNAL}/cgltf/tnt)
 add_subdirectory(${EXTERNAL}/draco/tnt)
 add_subdirectory(${EXTERNAL}/jsmn/tnt)
 add_subdirectory(${EXTERNAL}/stb/tnt)
-add_subdirectory(${EXTERNAL}/perfetto/tnt)
+if (NOT APPLETV)
+    # Perfetto's subprocess support uses fork()/exec*(), which are __TVOS_PROHIBITED.
+    # The library is only consumed on Android (FILAMENT_ENABLE_PERFETTO).
+    add_subdirectory(${EXTERNAL}/perfetto/tnt)
+endif()
 add_subdirectory(${EXTERNAL}/basisu/tnt)
 
 # imageio-lite is needed for viewer
@@ -992,14 +1000,24 @@ add_subdirectory(${FILAMENT}/filament)
 
 set(FILAMENT_SAMPLES_BINARY_DIR ${PROJECT_BINARY_DIR}/samples)
 
+# assimp is only used by filamentapp's MeshAssimp, which is not built for WASM.
+if (IS_HOST_PLATFORM OR ANDROID)
+   add_subdirectory(${EXTERNAL}/libassimp/tnt)
+endif()
+
+# filamentapp must come before the web/ subdirectories so that its target is
+# already defined when the WASM samples link against it.
+if (IS_HOST_PLATFORM OR ANDROID OR WASM)
+   add_subdirectory(${LIBRARIES}/filamentapp)
+endif()
+
 if (WASM)
     add_subdirectory(web/filament-js)
     add_subdirectory(web/examples)
-endif()
-
-if (IS_HOST_PLATFORM OR ANDROID)
-   add_subdirectory(${LIBRARIES}/filamentapp)
-   add_subdirectory(${EXTERNAL}/libassimp/tnt)
+    # Excluded from the default build so that building filament.js does not also build the
+    # samples, their resources, and the IBL cmgen produces for them. Build the samples through
+    # the filament-samples target, or name one, e.g. gltf_viewer.
+    add_subdirectory(${FILAMENT}/samples EXCLUDE_FROM_ALL)
 endif()
 
 if (IS_HOST_PLATFORM)
@@ -1039,4 +1057,9 @@ endif()
 # Generate exported executables for cross-compiled builds (Android, WASM, and iOS)
 if ((NOT CMAKE_CROSSCOMPILING AND NOT FILAMENT_IMPORT_PREBUILT_EXECUTABLES) OR FILAMENT_EXPORT_PREBUILT_EXECUTABLES)
     export(TARGETS matc cmgen filamesh mipgen resgen uberz glslminifier FILE ${IMPORT_EXECUTABLES})
+endif()
+
+# Builds libfilament-samples.a, which the sample-cpp-viewer Android app links against.
+if (ANDROID)
+    add_subdirectory(${FILAMENT}/samples)
 endif()

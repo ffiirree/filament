@@ -15,7 +15,6 @@
  */
 
 #include "common/arguments.h"
-#include "common/SampleConfig.h"
 
 #include "generated/resources/resources.h"
 
@@ -44,6 +43,8 @@
 #include <utils/Path.h>
 
 #include <math/norm.h>
+
+#include <samples/SampleConfig.h>
 
 #include <iostream>
 #include <map>
@@ -80,11 +81,17 @@ struct App {
     bool shadowPlane = false;
     bool discoBall = false;
 };
+
+static const char* MODEL_FILE = "assets/models/monkey/monkey.obj";
+static const char* IBL_FOLDER = "assets/ibl/lightroom_14b";
 } // namespace
 
 
 std::unique_ptr<FilamentApp2> createSampleApp(SampleConfig config,
         filament::app::DisplayManager* dm, filament::app::AssetLoader* loader) {
+    if (config.iblDirectory.empty()) {
+        config.iblDirectory = utils::CString(IBL_FOLDER);
+    }
     auto app = std::make_shared<App>();
     app->config = config;
 
@@ -143,10 +150,8 @@ std::unique_ptr<FilamentApp2> createSampleApp(SampleConfig config,
         for (auto& filename: app->filenames) {
             app->meshSet->addFromFile(filename, app->materialLibrary);
         }
-        if (app->filenames.empty()) {
-            app->meshSet->addFromFile(FilamentApp2::getRootAssetsPath() +
-                                              "assets/models/monkey/monkey.obj",
-                    app->materialLibrary);
+        if (app->meshSet->getRenderables().empty()) {
+            app->meshSet->addFromFile(MODEL_FILE, app->materialLibrary);
         }
 
         auto& lcm = engine->getLightManager();
@@ -245,8 +250,7 @@ std::unique_ptr<FilamentApp2> createSampleApp(SampleConfig config,
                     app->spheres.back().setRadius(0.025f).setPosition(lcm.getPosition(instance));
 
                     auto mi = app->spheres.back().getMaterialInstance();
-                    mi->setParameter("baseColor", RgbaType::LINEAR,
-                            LinearColorA{ lcm.getColor(instance), 100.0f });
+                    mi->setParameter("baseColor", RgbType::LINEAR, lcm.getColor(instance));
                     mi->setParameter("roughness", 0.2f);
                     mi->setParameter("metallic", 0.0f);
                 }
@@ -287,7 +291,7 @@ std::unique_ptr<FilamentApp2> createSampleApp(SampleConfig config,
             app->spheres.emplace_back(*engine, app->filamentApp->getDefaultMaterial());
             app->spheres.back().setRadius(0.2f);
             auto mi = app->spheres.back().getMaterialInstance();
-            mi->setParameter("baseColor", RgbaType::LINEAR, LinearColorA{ 1, 1, 1, 1 });
+            mi->setParameter("baseColor", RgbType::LINEAR, LinearColor{ 1, 1, 1 });
             mi->setParameter("roughness", 0.01f);
             mi->setParameter("metallic", 1.0f);
             scene->addEntity(app->spheres.back().getSolidRenderable());
@@ -437,27 +441,26 @@ int main(int argc, char* argv[]) {
     SampleConfig config;
     samples::CommandLineSpecification spec = {
         .sampleDescription = "LIGHTBULB is a point light and shadow testing tool for Filament.",
-        .positionalArgsDescription = { "mesh files (.obj, .fbx)" },
+        .positionalArgsDescription = { "[mesh files (.obj, .fbx)]" },
+        .requiredPositionalArgCount = 0,
         .parameters = createAppParameters(),
     };
 
     samples::handleCommandLineArguments(argc, argv, &config, spec);
     auto dm = samples::getDisplayManager(config);
+    auto loader = samples::getAssetLoader(config);
 
     for (const auto& fname : config.positionalArgs) {
         utils::Path filename(fname.c_str_safe());
-        if (!filename.exists()) {
+        if (!loader->exists(filename)) {
             std::cerr << "file " << filename << " not found!" << std::endl;
             return 1;
         }
     }
 
     config.title = "Lightbulb";
-
-    auto loader = new filament::app::DesktopAssetLoader();
-    auto app = createSampleApp(config, dm.get(), loader);
+    auto app = createSampleApp(config, dm.get(), loader.get());
     app->run();
-    delete loader;
 
     return 0;
 }

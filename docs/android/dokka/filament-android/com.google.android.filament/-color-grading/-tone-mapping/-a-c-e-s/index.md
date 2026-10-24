@@ -11,4 +11,4 @@
 
 ---
 
-ACES tone mapping.
+ACES tone mapping

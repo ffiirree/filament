@@ -249,10 +249,11 @@ if (FILAMENT_BUILD_TESTING)
     if (TNT_DEV AND NOT WASM AND NOT ANDROID AND NOT IOS)
         set(TEST_TARGET test_gltfio)
 
-        add_executable(${TEST_TARGET} test/gltfio_test.cpp)
+        add_executable(${TEST_TARGET} test/gltfio_test.cpp test/GlbBuilders.cpp)
         add_dependencies(${TEST_TARGET} test_gltfio_files)
         set_property(TARGET test_gltfio PROPERTY LINK_LIBRARIES)
 
+        target_include_directories(${TEST_TARGET} PRIVATE src)
         target_link_libraries(${TEST_TARGET} PRIVATE ${TARGET} gtest uberarchive)
         if (NOT MSVC)
             target_compile_options(${TEST_TARGET} PRIVATE ${GLTFIO_WARNINGS})

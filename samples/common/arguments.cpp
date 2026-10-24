@@ -16,8 +16,17 @@
 
 #include "arguments.h"
 
+#ifndef __ANDROID__
+#include <filamentapp/DesktopAssetLoader.h>
+#include <filamentapp/DesktopAssetWriter.h>
+#if defined(__EMSCRIPTEN__)
+#include <filamentapp/EmscriptenDisplayManager.h>
+#else
+#include <filamentapp/HeadlessDisplayManager.h>
 #include <filamentapp/HtmlDisplayManager.h>
 #include <filamentapp/SDLDisplayManager.h>
+#endif
+#endif
 
 #include <filament/Engine.h>
 
@@ -26,12 +35,28 @@
 #include <utils/getopt.h>
 #include <utils/Path.h>
 
+#if defined(__EMSCRIPTEN__)
+#include <emscripten.h>
+#endif
+
 #include <algorithm>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <memory>
+#include <utility>
 #include <vector>
 
 namespace {
+
+#if defined(__EMSCRIPTEN__)
+// Tells the hosting page that the run is over and no frame is coming. The page cannot infer this
+// from callMain() alone: a zero status means either that the frame loop is now running or that
+// main() finished without one, as it does for --help.
+void notifyPageOfExit() {
+    EM_ASM({ globalThis.dispatchEvent(new CustomEvent('filament-app-exit')); });
+}
+#endif
 
 filament::Engine::Backend parseArgumentsForBackend(const utils::CString& backend) {
     if (backend == "metal") {
@@ -67,33 +92,6 @@ filament::Engine::Backend resolveBackend(filament::Engine::Backend backend) {
 #endif
     }
     return backend;
-}
-
-samples::SampleParameters getCommonParameters() {
-    return {
-        samples::Parameter::makeEnum("api", 'a', "Specify the backend API", "default",
-                { "opengl", "vulkan", "metal", "webgpu" }),
-        samples::Parameter::makeInt("feature-level", 'f', "Specify feature level", 3, 1, 3, 1),
-        samples::Parameter::makeBool("headless", 'e', "Run in headless mode", false),
-        samples::Parameter::makeString("ibl", 'i', "Path to directory containing IBL", ""),
-        samples::Parameter::makeEnum("camera", 'c', "Specify camera mode", "orbit",
-                { "orbit", "flight" }),
-        samples::Parameter::makeInt("eyes", 'y', "Stereoscopic eye count", 2, 1, 4, 1),
-        samples::Parameter::makeBool("split-view", 'v', "Enable split-view", false),
-        samples::Parameter::makeString("vulkan-gpu-hint", 'g',
-                "Vulkan physical device selection hint", ""),
-        samples::Parameter::makeEnum("webgpu-backend", 'w', "Forced WebGPU backend", "default",
-                { "opengl", "vulkan", "metal", "webgpu" }),
-        samples::Parameter::makeBool("remote", 'x', "Run web server and enable remote control",
-                false),
-        samples::Parameter::makeString("screenshot", '\0', "Output screenshot image path", ""),
-        samples::Parameter::makeInt("frames", '\0', "Number of frames before capture / exit", 10,
-                1),
-        samples::Parameter::makeFloat("fixed-timestep", '\0',
-                "Fixed animation timestep in seconds (<=0 for wallclock)", 0.0f, 0.0f),
-        samples::Parameter::makeString("window-size", '\0', "Window size in WIDTHxHEIGHT format",
-                ""),
-    };
 }
 
 void printParameterHelp(const samples::Parameter& param) {
@@ -144,7 +142,7 @@ void printParameterHelp(const samples::Parameter& param) {
 }
 
 void validateSpecification(const samples::CommandLineSpecification& spec) {
-    auto commonParams = getCommonParameters();
+    auto commonParams = samples::getCommonParameters();
 
     for (size_t i = 0; i < spec.parameters.size(); ++i) {
         const auto& param = spec.parameters[i];
@@ -176,6 +174,34 @@ void validateSpecification(const samples::CommandLineSpecification& spec) {
 } // namespace
 
 namespace samples {
+
+SampleParameters getCommonParameters() {
+    return {
+        samples::Parameter::makeEnum("api", 'a', "Specify the backend API", "default",
+                { "opengl", "vulkan", "metal", "webgpu" }),
+        samples::Parameter::makeInt("feature-level", 'f', "Specify feature level", 3, 1, 3, 1),
+        samples::Parameter::makeBool("headless", 'e', "Run in headless mode", false),
+        samples::Parameter::makeString("ibl", 'i', "Path to directory containing IBL", ""),
+        samples::Parameter::makeEnum("camera", 'c', "Specify camera mode", "orbit",
+                { "orbit", "flight" }),
+        samples::Parameter::makeInt("eyes", 'y', "Stereoscopic eye count", 2, 1, 4, 1),
+        samples::Parameter::makeBool("split-view", 'v', "Enable split-view", false),
+        samples::Parameter::makeString("vulkan-gpu-hint", 'g',
+                "Vulkan physical device selection hint", ""),
+        samples::Parameter::makeEnum("webgpu-backend", 'w', "Forced WebGPU backend", "default",
+                { "opengl", "vulkan", "metal", "webgpu" }),
+        samples::Parameter::makeBool("remote", 'x', "Run web server and enable remote control",
+                false),
+        samples::Parameter::makeString("screenshot", '\0', "Output screenshot image path", ""),
+        samples::Parameter::makeString("assets-path", '\0', "Path to root assets directory", ""),
+        samples::Parameter::makeInt("frames", '\0', "Number of frames before capture / exit", 10,
+                1),
+        samples::Parameter::makeFloat("fixed-timestep", '\0',
+                "Fixed animation timestep in seconds (<=0 for wallclock)", 0.0f, 0.0f),
+        samples::Parameter::makeString("window-size", '\0', "Window size in WIDTHxHEIGHT format",
+                ""),
+    };
+}
 
 void printUsage(const char* name, const CommandLineSpecification& spec) {
     validateSpecification(spec);
@@ -235,7 +261,6 @@ FilamentApp2::Builder getBuilder(const SampleConfig& config, filament::app::Disp
                            .featureLevel(config.featureLevel)
                            .cameraMode(config.cameraMode)
                            .resizeable(config.resizeable)
-                           .headless(config.headless)
                            .stereoscopicEyeCount(config.stereoscopicEyeCount)
                            .vulkanGPUHint(config.vulkanGPUHint)
                            .forcedWebGPUBackend(config.forcedWebGPUBackend)
@@ -257,10 +282,80 @@ FilamentApp2::Builder getBuilder(const SampleConfig& config, filament::app::Disp
 }
 
 std::unique_ptr<filament::app::DisplayManager> getDisplayManager(const SampleConfig& config) {
+#if defined(__EMSCRIPTEN__)
+    // The only display manager a browser build can have: --headless and --remote, the two flags
+    // that would ask for a different one, are rejected by handleCommandLineArguments().
+    // config.headless may still be set, since --screenshot sets it, but on this path it selects
+    // nothing and only affects readback.
+    auto displayManager =
+            std::make_unique<filament::app::EmscriptenDisplayManager>(config.backend);
+
+    // Let the page know the run is over. This fires strictly after FilamentApp2::shutdown(), so
+    // everything the app writes to the virtual filesystem is already there.
+    displayManager->setExitCallback(&notifyPageOfExit);
+
+    return displayManager;
+#elif !defined(__ANDROID__)
     if (config.displayManager == SampleConfig::DisplayManager::WEB) {
         return std::make_unique<filament::app::HtmlDisplayManager>();
     }
+    if (config.headless) {
+        return std::make_unique<filament::app::HeadlessDisplayManager>();
+    }
     return std::make_unique<filament::app::SDLDisplayManager>(config.backend);
+#else
+    return nullptr;
+#endif
+}
+
+#ifndef __ANDROID__
+utils::Path getDefaultAssetPath() {
+#if defined(__EMSCRIPTEN__)
+    // MEMFS has no notion of an executable location: assets are mounted (preloaded, or written by
+    // the harness) at the root of the virtual filesystem.
+    return utils::Path("/");
+#else
+    return utils::Path::getCurrentExecutable().getParent() + RELATIVE_ASSET_PATH;
+#endif
+}
+
+std::unique_ptr<filament::app::AssetLoader> getAssetLoader(const SampleConfig& config) {
+    if (!config.assetsPath.empty()) {
+        return std::make_unique<filament::app::DesktopAssetLoader>(utils::Path(config.assetsPath));
+    }
+    return std::make_unique<filament::app::DesktopAssetLoader>(getDefaultAssetPath());
+}
+
+std::unique_ptr<filament::app::AssetWriter> getAssetWriter(const SampleConfig& config) {
+    if (!config.assetsPath.empty()) {
+        return std::make_unique<filament::app::DesktopAssetWriter>(utils::Path(config.assetsPath));
+    }
+    return std::make_unique<filament::app::DesktopAssetWriter>(getDefaultAssetPath());
+}
+#endif
+
+int runApp(std::unique_ptr<FilamentApp2> app,
+        std::unique_ptr<filament::app::DisplayManager> displayManager,
+        std::unique_ptr<filament::app::AssetLoader> assetLoader,
+        std::unique_ptr<filament::app::AssetWriter> assetWriter) {
+    app->run();
+
+#if defined(__EMSCRIPTEN__)
+    // run() returned as soon as the frame loop was registered with requestAnimationFrame, and the
+    // app still refers to all of these. The page decides when the run ends, and the wasm instance
+    // is torn down wholesale when it does, so ownership is simply released.
+    (void) app.release();
+    (void) displayManager.release();
+    (void) assetLoader.release();
+    (void) assetWriter.release();
+#else
+    // Destroyed first, and explicitly: ~FilamentApp2() runs shutdown(), which calls back into the
+    // display manager and may invoke a cleanup callback holding the loader. The destruction order
+    // of by-value parameters is unspecified, so it cannot be relied on here.
+    app.reset();
+#endif
+
+    return 0;
 }
 
 int handleCommandLineArguments(int argc, char* argv[], SampleConfig* config,
@@ -342,6 +437,10 @@ int handleCommandLineArguments(int argc, char* argv[], SampleConfig* config,
 
         if (opt == 'h') {
             printUsage(argv[0], spec);
+#if defined(__EMSCRIPTEN__)
+            // callMain() reports exit(0) exactly as it would a frame loop that has started.
+            notifyPageOfExit();
+#endif
             exit(0);
         }
 
@@ -399,7 +498,17 @@ int handleCommandLineArguments(int argc, char* argv[], SampleConfig* config,
                     exit(1);
                 }
             } else if (cp.name == "headless") {
+#if defined(__EMSCRIPTEN__)
+                // The browser display manager always renders to the canvas. PlatformWebGL cannot
+                // render offscreen at all, and although the WebGPU driver can, nothing drives a
+                // frame loop without the canvas. Rejecting here rather than in getDisplayManager()
+                // keeps --screenshot working, which only needs a readback.
+                std::cerr << "--headless is not supported in a browser: rendering always targets "
+                             "the canvas. Use --screenshot to capture frames.\n";
+                exit(1);
+#else
                 config->headless = true;
+#endif
             } else if (cp.name == "ibl") {
                 config->iblDirectory = arg;
             } else if (cp.name == "split-view") {
@@ -409,13 +518,23 @@ int handleCommandLineArguments(int argc, char* argv[], SampleConfig* config,
             } else if (cp.name == "webgpu-backend") {
                 config->forcedWebGPUBackend = parseArgumentsForBackend(arg);
             } else if (cp.name == "remote") {
+#if defined(__EMSCRIPTEN__)
+                // --remote asks a native binary to serve a UI over HTTP so a browser elsewhere can
+                // drive it. There is nothing for it to mean in a build that is already the page.
+                std::cerr << "--remote is not supported in a browser: it serves a remote UI from a "
+                             "native binary, and this build is already running in a browser.\n";
+                exit(1);
+#else
                 config->displayManager = SampleConfig::DisplayManager::WEB;
                 config->headless = true;
+#endif
             } else if (cp.name == "screenshot") {
                 config->screenshotPath = arg;
                 if (!arg.empty()) {
                     config->headless = true;
                 }
+            } else if (cp.name == "assets-path") {
+                config->assetsPath = arg;
             } else if (cp.name == "frames") {
                 try {
                     config->warmupFrames = std::stoi(arg.c_str());

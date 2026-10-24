@@ -122,6 +122,10 @@ public:
         return mManager.getEntities();
     }
 
+    utils::Slice<const utils::Entity> getAllEntities() const noexcept {
+        return { mManager.getEntities(), mManager.getComponentCount() };
+    }
+
     const utils::PagedArenaBitset& getEntityBitset() const noexcept {
         return mManager.getEntityBitset();
     }
@@ -230,6 +234,7 @@ public:
     size_t getLevelCount(Instance) const noexcept { return 1u; }
     size_t getPrimitiveCount(Instance instance, uint8_t level) const noexcept;
     size_t getInstanceCount(Instance instance) const noexcept;
+    void setInstanceCount(Instance instance, size_t instanceCount);
     void setMaterialInstanceAt(Instance instance, uint8_t level,
             size_t primitiveIndex, FMaterialInstance const* mi);
     void clearMaterialInstanceAt(Instance instance, uint8_t level, size_t primitiveIndex);

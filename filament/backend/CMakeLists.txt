@@ -308,6 +308,8 @@ if (FILAMENT_SUPPORTS_WEBGPU)
             src/webgpu/utils/SpecializationConstantProcessor.h
             src/webgpu/utils/StringPlaceholderTemplateProcessor.cpp
             src/webgpu/utils/StringPlaceholderTemplateProcessor.h
+            src/webgpu/utils/VertexHelper.cpp
+            src/webgpu/utils/VertexHelper.h
             src/webgpu/WebGPUBlitter.cpp
             src/webgpu/WebGPUBlitter.h
             src/webgpu/WebGPUBufferBase.cpp
@@ -617,19 +619,23 @@ if (FILAMENT_BUILD_TESTING)
             test/test_BufferUpdates.cpp
             test/test_AsyncCompletion.cpp
             test/test_Callbacks.cpp
+            test/test_CallbackManager.cpp
             test/test_JobQueue.cpp
             test/test_MemoryMappedBuffer.cpp
             test/test_MsaaSwapChain.cpp
             test/test_FrameRateControl.cpp
             test/test_MRT.cpp
             test/test_PushConstants.cpp
+            test/test_SpecializationConstants.cpp
             test/test_LoadImage.cpp
             test/test_StencilBuffer.cpp
             test/test_Scissor.cpp
             test/test_MipLevels.cpp
             test/test_Handles.cpp
+            test/test_BlobCacheKey.cpp
             test/test_CircularBuffer.cpp
             test/test_CommandBufferQueue.cpp
+            test/test_DescriptorSet.cpp
             test/test_Template.cpp
             test/test_ThreadPriorityOverride.cpp
             test/test_AsyncUploads.cpp
@@ -639,7 +645,8 @@ if (FILAMENT_BUILD_TESTING)
             list(APPEND BACKEND_TEST_SRC
                     test/test_WebGPUAsyncTaskCounter.cpp
                     test/test_WebGPUComposeSwizzle.cpp
-                    test/test_WebGPUSpecializationConstantProcessor.cpp)
+                    test/test_WebGPUSpecializationConstantProcessor.cpp
+                    test/test_WebGPUVertexHelper.cpp)
         endif()
         if (APPLE)
             # Metal-specific tests

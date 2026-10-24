@@ -11,7 +11,9 @@ open fun [~~toneMapping~~](tone-mapping.md)(toneMapping: [ColorGrading.ToneMappi
 
 ---
 
-Selects the tone mapping operator to apply to the HDR color buffer as the last operation of the color grading post-processing step. The default tone mapping operator is [ACES_LEGACY](../-tone-mapping/-a-c-e-s_-l-e-g-a-c-y/index.md).
+Selects the tone mapping operator to apply to the HDR color buffer as the last operation of the color grading post-processing step. 
+
+The default tone mapping operator is ACES_LEGACY.
 
 #### Return
 
@@ -19,7 +21,7 @@ This Builder, for chaining calls
 
 #### Deprecated
 
-Use [toneMapper](tone-mapper.md)
+Use toneMapper(ToneMapper*) instead
 
 #### Parameters
 

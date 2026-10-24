@@ -3,6 +3,20 @@
 # assertNativeWindowIsValid
 
 [main]\
-open var [assertNativeWindowIsValid](assert-native-window-is-valid.md): [Boolean](https://kotlinlang.org/api/latest/jvm/stdlib/kotlin-stdlib/kotlin/-boolean/index.html)
+open var [~~assertNativeWindowIsValid~~](assert-native-window-is-valid.md): [Boolean](https://kotlinlang.org/api/latest/jvm/stdlib/kotlin-stdlib/kotlin/-boolean/index.html)
 
-Assert the native window associated to a SwapChain is valid when calling makeCurrent(). This is only supported for: - PlatformEGLAndroid
+---
+
+### Deprecated
+
+---
+
+Assert the native window associated to a SwapChain is valid when calling makeCurrent(). 
+
+This is only supported for:
+
+- PlatformEGLAndroid
+
+#### Deprecated
+
+use &quot;backend.opengl.assert_native_window_is_valid&quot; feature flag instead

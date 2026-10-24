@@ -96,6 +96,7 @@ void FScene::prepare(JobSystem& js,
     EntityManager const& em = engine.getEntityManager();
     FRenderableManager const& rcm = engine.getRenderableManager();
     FTransformManager const& tcm = engine.getTransformManager();
+    tcm.ensureWorldTransformsUpToDate();
     FLightManager const& lcm = engine.getLightManager();
     // go through the list of entities, and gather the data of those that are renderables
     auto& sceneData = cache.renderableData;
@@ -140,7 +141,8 @@ void FScene::prepare(JobSystem& js,
                     lightInstances.emplace_back(li, ti);
                 }
             }
-            if (ri) {
+            // Renderables with an instance count of 0 are not drawn, so we skip them entirely.
+            if (ri && rcm.getInstancesInfo(ri).count) {
                 renderableInstances.emplace_back(ri, ti);
             }
         }
@@ -587,9 +589,9 @@ void FScene::addEntity(Entity const entity) {
 }
 
 UTILS_NOINLINE
-void FScene::addEntities(const Entity* entities, size_t const count) {
-    for (size_t i = 0; i < count; ++i, ++entities) {
-        addEntity(*entities);
+void FScene::addEntities(utils::Slice<const Entity> entities) {
+    for (Entity const entity : entities) {
+        addEntity(entity);
     }
 }
 
@@ -599,9 +601,9 @@ void FScene::remove(Entity const entity) {
 }
 
 UTILS_NOINLINE
-void FScene::removeEntities(const Entity* entities, size_t const count) {
-    for (size_t i = 0; i < count; ++i, ++entities) {
-        remove(*entities);
+void FScene::removeEntities(utils::Slice<const Entity> entities) {
+    for (Entity const entity : entities) {
+        remove(entity);
     }
 }
 

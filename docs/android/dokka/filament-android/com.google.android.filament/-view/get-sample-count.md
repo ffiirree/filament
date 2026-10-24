@@ -11,13 +11,13 @@ open fun [~~getSampleCount~~](get-sample-count.md)(): [Int](https://kotlinlang.o
 
 ---
 
-Returns the effective MSAA sample count. 
+Returns the sample count set by setSampleCount(). 
 
- A value of 0 or 1 means MSAA is disabled. 
+Effective sample count could be different. A value of 0 or 1 means MSAA is disabled.
 
 #### Return
 
-value set by [setSampleCount](set-sample-count.md)
+value set by setSampleCount().
 
 #### Deprecated
 

@@ -180,6 +180,11 @@ void WebGPUDriver::setFrameCompletedCallback(Handle<HwSwapChain> sch,
 
 }
 
+bool WebGPUDriver::isPresentationTimeSupported() {
+    // WebGPU has no API to schedule the presentation of a frame.
+    return false;
+}
+
 void WebGPUDriver::setPresentationTime(int64_t monotonic_clock_ns) {
 }
 
@@ -208,15 +213,19 @@ void WebGPUDriver::finish(int /* dummy */) {
     mQueueManager.finish();
     mPipelineState = {};
 
+#if !defined(__EMSCRIPTEN__)
     // We use polling to advance webgpu's callback counter until all the read backs have been
     // processed. Note that blocking with mReadPixelMapsCounter.waitForAllToFinish will only
     // deadlock since we could not advance the counter.
     while (!mReadPixelMapsCounter.isIdle()) {
-#if !defined(__EMSCRIPTEN__)
         mAdapter.GetInstance().ProcessEvents();
-#endif
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+#else
+    // Under Emscripten, readPixels callbacks are delivered from the browser's event loop (see
+    // FILAMENT_WEBGPU_MAP_ASYNC_CALLBACK_MODE), which cannot run until we return. Waiting here
+    // would never finish, so pending readbacks complete after control returns to the browser.
+#endif
 }
 
 void WebGPUDriver::destroyRenderPrimitive(Handle<HwRenderPrimitive> rph) {
@@ -549,7 +558,7 @@ void WebGPUDriver::createVertexBufferR(Handle<HwVertexBuffer> vertexBufferHandle
     FWGPU_SYSTRACE_SCOPE();
     const auto vertexBufferInfo = handleCast<WebGPUVertexBufferInfo>(vertexBufferInfoHandle);
     constructHandle<WebGPUVertexBuffer>(vertexBufferHandle, vertexCount,
-            vertexBufferInfo->bufferCount, vertexBufferInfoHandle);
+            vertexBufferInfo->getVertexBufferLayoutCount(), vertexBufferInfoHandle);
     setDebugTag(vertexBufferHandle.getId(), std::move(tag));
 }
 
@@ -813,7 +822,24 @@ void WebGPUDriver::destroyFence(Handle<HwFence> fenceHandle) {
 }
 
 void WebGPUDriver::fenceCancel(FenceHandle fh) {
-    // it's okay to implement cancel as a no-op, because not all API support truly canceling.
+    // Even though this is a synchronous call, the fence handle must be (and stay) valid
+    assert_invariant(fh);
+    const auto fence = handleCast<WebGPUFence>(fh);
+    assert_invariant(fence);
+
+    // This cannot be a no-op the way it is for backends that can simply abandon a waiter.
+    //
+    // A WebGPU fence is only ever satisfied from the OnSubmittedWorkDone callback, and Dawn only
+    // delivers that callback while something pumps Instance::ProcessEvents() -- for us that is
+    // exclusively WebGPUQueueManager::finish(), which runs on the driver thread.
+    //
+    // Signaling ERROR here matches OpenGLDriver::fenceCancel and is handled by callers as "fence
+    // wait unsupported / unavailable", which is the correct interpretation of a cancelled fence.
+    if (auto const state = fence->getState()) {
+        state->setStatus(FenceStatus::ERROR);
+    }
+    // If no submission state has been attached yet there is nothing to signal: the state is
+    // attached by createFenceR on the driver thread, which is ordered before any cancel.
 }
 
 FenceStatus WebGPUDriver::getFenceStatus(Handle<HwFence> fenceHandle) {
@@ -1082,9 +1108,11 @@ void WebGPUDriver::setVertexBufferObject(Handle<HwVertexBuffer> vertexBufferHand
         const uint32_t index, Handle<HwBufferObject> bufferObjectHandle) {
     const auto vertexBuffer = handleCast<WebGPUVertexBuffer>(vertexBufferHandle);
     const auto bufferObject = handleCast<WebGPUBufferObject>(bufferObjectHandle);
-    assert_invariant(index < vertexBuffer->getBuffers().size());
-    assert_invariant(bufferObject->getBuffer().GetUsage() & wgpu::BufferUsage::Vertex);
-    vertexBuffer->getBuffers()[index] = bufferObject->getBuffer();
+    auto const vertexBufferInfo =
+            handleCast<WebGPUVertexBufferInfo>(vertexBuffer->getVertexBufferInfoHandle());
+    assert_invariant(index < vertexBufferInfo->bufferCount);
+    bufferObject->attachToVertexBuffer(*vertexBuffer, *vertexBufferInfo, index, mDevice,
+            &mQueueManager, &mStagePool);
 }
 
 void WebGPUDriver::setVertexBufferObjectAsyncR(AsyncCallId jobId,
@@ -1751,6 +1779,7 @@ void WebGPUDriver::readTextureToBuffer(wgpu::Texture srcTexture, uint32_t level,
         uint32_t width;
         uint32_t height;
         WebGPUDriver *driver;
+        std::weak_ptr<bool> driverLifetime;
     };
     auto userData = std::make_unique<UserData>(UserData{
             .pixelBufferDescriptor = std::move(pixelBufferDescriptor),
@@ -1760,6 +1789,7 @@ void WebGPUDriver::readTextureToBuffer(wgpu::Texture srcTexture, uint32_t level,
             .width = width,
             .height = actualHeight,
             .driver = this,
+            .driverLifetime = mLifetimeToken,
     });
 
     mReadPixelMapsCounter.startTask();
@@ -1767,9 +1797,17 @@ void WebGPUDriver::readTextureToBuffer(wgpu::Texture srcTexture, uint32_t level,
     // pending to be submitted.
     mQueueManager.flush();
     userData->buffer.MapAsync(
-            wgpu::MapMode::Read, 0, bufferSize, wgpu::CallbackMode::AllowProcessEvents,
+            wgpu::MapMode::Read, 0, bufferSize, FILAMENT_WEBGPU_MAP_ASYNC_CALLBACK_MODE,
             [](wgpu::MapAsyncStatus status, wgpu::StringView message, UserData* userdata) {
                 std::unique_ptr<UserData> data(static_cast<UserData*>(userdata));
+                if (UTILS_UNLIKELY(data->driverLifetime.expired())) {
+                    // The driver was destroyed before the readback completed, which can only
+                    // happen under Emscripten. Its callback handler may be gone as well, so we
+                    // clear the release callback rather than risk invoking client code that has
+                    // already been torn down. The client's buffer is leaked.
+                    data->pixelBufferDescriptor.setCallback(nullptr);
+                    return;
+                }
                 if (UTILS_LIKELY(status == wgpu::MapAsyncStatus::Success)) {
                     const char* src{ static_cast<const char*>(
                             data->buffer.GetConstMappedRange(0, data->buffer.GetSize())) };
@@ -2071,13 +2109,13 @@ void WebGPUDriver::bindRenderPrimitive(Handle<HwRenderPrimitive> renderPrimitive
     const auto renderPrimitive = handleCast<WebGPURenderPrimitive>(renderPrimitiveHandle);
     const auto vertexBufferInfo = handleCast<WebGPUVertexBufferInfo>(
             renderPrimitive->vertexBuffer->getVertexBufferInfoHandle());
-    for (size_t slotIndex = 0; slotIndex < vertexBufferInfo->getVertexBufferLayoutCount();
-            slotIndex++) {
-        WebGPUVertexBufferInfo::WebGPUSlotBindingInfo const& bindingInfo =
-                vertexBufferInfo->getWebGPUSlotBindingInfos()[slotIndex];
-        mRenderPassEncoder.SetVertexBuffer(slotIndex,
-                renderPrimitive->vertexBuffer->getBuffers()[bindingInfo.sourceBufferIndex],
-                bindingInfo.bufferOffset);
+    std::vector<WebGPUVertexBuffer::SlotBinding> const& slotBindings =
+            renderPrimitive->vertexBuffer->getSlotBindings();
+    size_t const slotCount = vertexBufferInfo->getVertexBufferLayoutCount();
+    assert_invariant(slotBindings.size() == slotCount);
+    for (size_t slotIndex = 0; slotIndex < slotCount; slotIndex++) {
+        WebGPUVertexBuffer::SlotBinding const& slotBinding = slotBindings[slotIndex];
+        mRenderPassEncoder.SetVertexBuffer(slotIndex, slotBinding.buffer, slotBinding.offset);
     }
     // Index buffer is optional: non-indexed (attribute-less) primitives have none.
     if (renderPrimitive->indexBuffer) {

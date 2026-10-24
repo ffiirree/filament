@@ -99,6 +99,7 @@ public:
     MOCK_METHOD(backend::FeatureLevel, getFeatureLevel, (), (override));
     MOCK_METHOD(size_t, getUniformBufferOffsetAlignment, (), (override));
     MOCK_METHOD(bool, isCompositorTimingSupported, (), (override));
+    MOCK_METHOD(bool, isPresentationTimeSupported, (), (override));
     MOCK_METHOD(bool, queryFrameTimestamps, (SwapChainHandle, uint64_t, FrameTimestamps*), (override));
     MOCK_METHOD(bool, queryCompositorTiming, (SwapChainHandle, CompositorTiming*), (override));
     MOCK_METHOD(void, fenceCancel, (backend::FenceHandle), (override));
@@ -122,6 +123,7 @@ public:
     void debugCommandEnd(CommandStream* cmds, bool synchronous,
             const char* methodName) noexcept override {}
     void purge() noexcept override {}
+    void purgeAll() noexcept override {}
     void scheduleCallback(CallbackHandler* handler, void* user,
             CallbackHandler::Callback callback) override {}
 

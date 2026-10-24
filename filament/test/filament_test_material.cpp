@@ -29,7 +29,28 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
+#include <tuple>
+
 using namespace filament;
+
+namespace {
+
+std::vector<std::unique_ptr<char[]>> churnHeapForMaterialParser() {
+    std::vector<std::unique_ptr<char[]>> churn;
+    churn.reserve(128);
+    for (int i = 0; i < 128; ++i) {
+        auto buf = std::make_unique<char[]>(296);
+        std::memset(buf.get(), 0xAA, 296);
+        churn.push_back(std::move(buf));
+    }
+    return churn;
+}
+
+// Parameters: (enable_program_cache feature flag, whether to duplicate the instance).
+class SpecializedInstanceLifetimeTest : public testing::TestWithParam<std::tuple<bool, bool>> {};
+
+} // anonymous namespace
 
 TEST(MaterialTransformName, QuerySamplerWithTransform) {
     Engine* engine = Engine::create(Engine::Backend::NOOP);
@@ -233,6 +254,74 @@ TEST(MaterialInstanceTest, SetConstant) {
     Engine::destroy(engine);
 }
 
+TEST(MaterialInstanceTest, ParameterLargerThanFieldIsRejected) {
+    Engine* engine = Engine::create(Engine::Backend::NOOP);
+    ASSERT_NE(engine, nullptr);
+
+    std::string shaderCode(R"(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.baseColor = vec4(1.0);
+        }
+    )");
+
+    // Layout: "m" at bytes [0, 48), "f" at 48, "g" at 52, "a" at [64, 96).
+    filamat::MaterialBuilder builder;
+    builder.init();
+    builder.name("MaterialInstanceTest");
+    builder.material(shaderCode.c_str());
+    builder.parameter("m", filamat::MaterialBuilder::UniformType::MAT3);
+    builder.parameter("f", filamat::MaterialBuilder::UniformType::FLOAT);
+    builder.parameter("g", filamat::MaterialBuilder::UniformType::FLOAT);
+    builder.parameter("a", 2, filamat::MaterialBuilder::UniformType::FLOAT);
+
+    filamat::Package result = builder.build(engine->getJobSystem());
+    ASSERT_TRUE(result.isValid());
+
+    Material* material = Material::Builder()
+            .package(result.getData(), result.getSize())
+            .build(*engine);
+    ASSERT_NE(material, nullptr);
+
+    MaterialInstance* instance = material->createInstance();
+    ASSERT_NE(instance, nullptr);
+
+    instance->setParameter("m", math::mat3f{ 2.0f });
+    EXPECT_EQ(instance->getParameter<math::mat3f>("m"), math::mat3f{ 2.0f });
+    math::mat3f const mat[1] = { math::mat3f{ 3.0f } };
+    instance->setParameter("m", mat, 1);
+    instance->setParameter("f", 1.0f);
+    EXPECT_EQ(instance->getParameter<float>("f"), 1.0f);
+    float const one[1] = { 1.0f };
+    instance->setParameter("f", one, 1);
+    instance->setParameter("g", 3.0f);
+    float const two[2] = { 1.0f, 2.0f };
+    instance->setParameter("a", two, 2);
+
+#if GTEST_HAS_EXCEPTIONS
+    // These stay inside the buffer but overrun the next field.
+    EXPECT_THROW(instance->setParameter("f", math::float4{ 9.0f }), utils::PreconditionPanic);
+    EXPECT_EQ(instance->getParameter<float>("g"), 3.0f);
+    EXPECT_THROW(instance->setParameter("f", math::float2{}), utils::PreconditionPanic);
+    EXPECT_THROW(instance->setParameter("f", math::mat3f{}), utils::PreconditionPanic);
+    EXPECT_THROW(instance->setParameter("m", math::mat4f{}), utils::PreconditionPanic);
+    EXPECT_THROW(instance->setParameter("f", two, 2), utils::PreconditionPanic);
+    math::mat3f const mats[2] = {};
+    EXPECT_THROW(instance->setParameter("m", mats, 2), utils::PreconditionPanic);
+    EXPECT_THROW(instance->getParameter<math::float4>("f"), utils::PreconditionPanic);
+    EXPECT_THROW(instance->getParameter<math::mat3f>("f"), utils::PreconditionPanic);
+    EXPECT_THROW(instance->getParameter<math::mat4f>("m"), utils::PreconditionPanic);
+
+    // This one runs past the end of the buffer.
+    float const three[3] = { 1.0f, 2.0f, 3.0f };
+    EXPECT_THROW(instance->setParameter("a", three, 3), utils::PreconditionPanic);
+#endif
+
+    engine->destroy(instance);
+    engine->destroy(material);
+    Engine::destroy(engine);
+}
+
 TEST(Material, CompileMaterialWithSkinningEnabled) {
     Engine* engine = Engine::create(Engine::Backend::NOOP);
 
@@ -331,11 +420,9 @@ TEST(MaterialVariant, DynamicLightingSpecKeySupportsPunctualShadowReceivers) {
             Variant::SRE,
             Variant::SRE | Variant::FOG,
             Variant::SRE | Variant::SKN,
-            Variant::SRE | Variant::DIR,
             Variant::S2D | Variant::SRE,
             Variant::S2D | Variant::SRE | Variant::FOG,
             Variant::S2D | Variant::SRE | Variant::SKN,
-            Variant::S2D | Variant::SRE | Variant::DIR,
             Variant::S2D | Variant::SRE | Variant::STE,
     };
 
@@ -356,6 +443,32 @@ TEST(MaterialVariant, DynamicLightingSpecKeySupportsPunctualShadowReceivers) {
     EXPECT_FALSE(DynamicSpecConstKey::filterProgramSpecKey(
             Variant(Variant::S2D | Variant::SRE), dynamicLighting,
             MaterialDomain::SURFACE, false).hasDynamicLighting());
+}
+
+TEST(MaterialVariant, DirectionalLightingSpecKeyExcludesDepthAndSsr) {
+    // Variant::DIR used to carry directional lighting, and Variant::filterVariant() cleared it on
+    // depth and SSR variants. Now that the bit lives in the specialization key, the same exclusion
+    // has to hold there instead.
+    DynamicSpecConstKey directionalLighting;
+    directionalLighting.setDirectionalLighting(true);
+
+    EXPECT_FALSE(DynamicSpecConstKey::filterProgramSpecKey(
+            Variant(Variant::SPECIAL_SSR_VARIANT), directionalLighting,
+            MaterialDomain::SURFACE, true).hasDirectionalLighting());
+    EXPECT_FALSE(DynamicSpecConstKey::filterProgramSpecKey(
+            Variant(Variant::DEPTH_VARIANT), directionalLighting,
+            MaterialDomain::SURFACE, true).hasDirectionalLighting());
+    EXPECT_FALSE(DynamicSpecConstKey::filterProgramSpecKey(
+            Variant(Variant::S2D | Variant::SRE), directionalLighting,
+            MaterialDomain::SURFACE, false).hasDirectionalLighting());
+    EXPECT_FALSE(DynamicSpecConstKey::filterProgramSpecKey(
+            Variant{}, directionalLighting,
+            MaterialDomain::POST_PROCESS, true).hasDirectionalLighting());
+
+    // An ordinary lit surface variant keeps it, otherwise the assertions above prove nothing.
+    EXPECT_TRUE(DynamicSpecConstKey::filterProgramSpecKey(
+            Variant(Variant::S2D | Variant::SRE), directionalLighting,
+            MaterialDomain::SURFACE, true).hasDirectionalLighting());
 }
 
 TEST(MaterialVariant, ExtraDirectionalLightsRequireDirectionalLighting) {
@@ -512,3 +625,197 @@ TEST(Material, CompileUnlitMaterialShadowMultiplierWithShadowReceiverEnabled) {
     engine->destroy(material);
     Engine::destroy(engine);
 }
+
+TEST(Material, MaterialCacheDestroyTriggersUAF) {
+    Engine::Config config;
+    config.materialCacheCapacity = 4;
+
+    Engine* engine = Engine::Builder().backend(Engine::Backend::NOOP).config(&config).build();
+    ASSERT_NE(engine, nullptr);
+
+    filamat::MaterialBuilder builder;
+    builder.init();
+    builder.name("MaterialCacheLruHitPathA");
+    builder.shading(Shading::UNLIT);
+    filamat::Package pkg = builder.build(engine->getJobSystem());
+    ASSERT_TRUE(pkg.isValid());
+
+    // Step 1: Initial Build (Factory Path) -> mDefinitions stores {key1{&Parser_1} -> Def_1}
+    Material* mat1 = Material::Builder().package(pkg.getData(), pkg.getSize()).build(*engine);
+    ASSERT_NE(mat1, nullptr);
+
+    // Step 2: Destroy -> Refcount drops to 0, Def_1 moves to LRU cache with key1{&Parser_1}
+    engine->destroy(mat1);
+
+    // Step 3: Rebuild with identical bytes -> LRU cache hits, pops Def_1.
+    Material* mat2 = Material::Builder().package(pkg.getData(), pkg.getSize()).build(*engine);
+    ASSERT_NE(mat2, nullptr);
+
+    auto churn = churnHeapForMaterialParser();
+
+    // Step 4 (Path A): Destroy mat2 directly.
+    // Calls mDefinitions.release(key_r{&Parser_1}), triggering mMap.find(key_r) which compares
+    // *Parser_1 == *dangling_Parser_2 (Heap UAF read / FILAMENT_CHECK_PRECONDITION abort).
+    engine->destroy(mat2);
+
+    Engine::destroy(engine);
+}
+
+TEST(Material, MaterialCacheThirdBuildTriggersUAFAndCorruption) {
+    Engine::Config config;
+    config.materialCacheCapacity = 4;
+
+    Engine* engine = Engine::Builder().backend(Engine::Backend::NOOP).config(&config).build();
+    ASSERT_NE(engine, nullptr);
+
+    filamat::MaterialBuilder builder;
+    builder.init();
+    builder.name("MaterialCacheLruHitPathB");
+    builder.shading(Shading::UNLIT);
+    filamat::Package pkg = builder.build(engine->getJobSystem());
+    ASSERT_TRUE(pkg.isValid());
+
+    // Step 1: Initial Build (Factory Path)
+    Material* mat1 = Material::Builder().package(pkg.getData(), pkg.getSize()).build(*engine);
+    ASSERT_NE(mat1, nullptr);
+
+    // Step 2: Destroy (LRU Population)
+    engine->destroy(mat1);
+
+    // Step 3: Rebuild (LRU Hit)
+    Material* mat2 = Material::Builder().package(pkg.getData(), pkg.getSize()).build(*engine);
+    ASSERT_NE(mat2, nullptr);
+
+    auto churn = churnHeapForMaterialParser();
+
+    // Step 4 (Path B): Build a third material from the same package bytes.
+    // mDefinitions.acquire calls mMap.find(key3{&Parser_3}), comparing *Parser_3 ==
+    // *dangling_Parser_2.
+    Material* mat3 = Material::Builder().package(pkg.getData(), pkg.getSize()).build(*engine);
+    ASSERT_NE(mat3, nullptr);
+    EXPECT_EQ(&downcast(mat2)->getDefinition(), &downcast(mat3)->getDefinition());
+
+    engine->destroy(mat2);
+    engine->destroy(mat3);
+
+    Engine::destroy(engine);
+}
+
+TEST(Material, ProgramCacheLruEvictUAF) {
+    Engine::Config config;
+    config.programCacheCapacity = 1;
+
+    Engine* engine = Engine::Builder()
+                             .backend(Engine::Backend::NOOP)
+                             .config(&config)
+                             .feature("engine.enable_program_cache", true)
+                             .build();
+    ASSERT_NE(engine, nullptr);
+
+    std::string shaderCode1(R"(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.baseColor = vec4(1.0, 0.0, 0.0, 1.0);
+        }
+    )");
+    filamat::MaterialBuilder builder1;
+    builder1.init();
+    builder1.name("Material1");
+    builder1.material(shaderCode1.c_str());
+    builder1.constant("myFloat", filamat::MaterialBuilder::ConstantType::FLOAT, 1.0f);
+    filamat::Package pkg1 = builder1.build(engine->getJobSystem());
+    ASSERT_TRUE(pkg1.isValid());
+
+    std::string shaderCode2(R"(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.baseColor = vec4(0.0, 1.0, 0.0, 1.0);
+        }
+    )");
+    filamat::MaterialBuilder builder2;
+    builder2.init();
+    builder2.name("MaterialB");
+    builder2.material(shaderCode2.c_str());
+    builder2.constant("myInt", filamat::MaterialBuilder::ConstantType::INT, 42);
+    filamat::Package pkg2 = builder2.build(engine->getJobSystem());
+    ASSERT_TRUE(pkg2.isValid());
+
+    // 1. Build, prepare program, and destroy Material A: populates LRU cache with compiled program
+    // and releases LocalProgramCache's InternPool ref.
+    Material* mat1 = Material::Builder().package(pkg1.getData(), pkg1.getSize()).build(*engine);
+    ASSERT_NE(mat1, nullptr);
+    downcast(mat1)->getPrograms().prepareProgram(downcast(*engine).getDriverApi(), Variant{ 0 },
+            DynamicSpecConstKey{ 0 }, backend::CompilerPriorityQueue::HIGH);
+    engine->destroy(mat1);
+
+    // 2. Build, prepare program, and destroy Material B: exceeds LRU capacity (1), evicting
+    // Material A's program from LRU. Eviction hashes Material A's key. Without pinning, this
+    // triggers a heap-use-after-free in Slice::hash().
+    Material* mat2 = Material::Builder().package(pkg2.getData(), pkg2.getSize()).build(*engine);
+    ASSERT_NE(mat2, nullptr);
+    downcast(mat2)->getPrograms().prepareProgram(downcast(*engine).getDriverApi(), Variant{ 0 },
+            DynamicSpecConstKey{ 0 }, backend::CompilerPriorityQueue::HIGH);
+    engine->destroy(mat2);
+
+    Engine::destroy(engine);
+}
+
+TEST_P(SpecializedInstanceLifetimeTest, DestroyInstanceKeepsMaterialDefinition) {
+    auto const [enableProgramCache, duplicateInstance] = GetParam();
+
+    Engine* engine = Engine::Builder()
+                             .backend(Engine::Backend::NOOP)
+                             .feature("engine.enable_program_cache", enableProgramCache)
+                             .build();
+    ASSERT_NE(engine, nullptr);
+    FEngine::DriverApi& driver = downcast(engine)->getDriverApi();
+
+    filamat::MaterialBuilder builder;
+    builder.init();
+    builder.name("SpecializedInstanceLifetime");
+    builder.material(R"(
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.baseColor = vec4(1.0);
+        }
+    )");
+    builder.constant("probe", filamat::MaterialBuilder::ConstantType::BOOL, false);
+    filamat::Package pkg = builder.build(engine->getJobSystem());
+    ASSERT_TRUE(pkg.isValid());
+
+    Material* material = Material::Builder().package(pkg.getData(), pkg.getSize()).build(*engine);
+    ASSERT_NE(material, nullptr);
+
+    // prepareProgram() flushes the pending constants, which initializes the instance's own
+    // program cache (this is what rendering a frame does).
+    MaterialInstance* instance = material->createInstance();
+    instance->setConstant("probe", true);
+    downcast(instance)->prepareProgram(driver, Variant{ 0 }, DynamicSpecConstKey{ 0 },
+            backend::CompilerPriorityQueue::HIGH);
+
+    if (duplicateInstance) {
+        MaterialInstance* copy = MaterialInstance::duplicate(instance);
+        ASSERT_NE(copy, nullptr);
+        EXPECT_TRUE(copy->getConstant<bool>("probe"));
+        engine->destroy(copy);
+    }
+    engine->destroy(instance);
+
+    // The material still holds its MaterialDefinition, so building the same package again must
+    // share it rather than create a new one.
+    Material* sameMaterial =
+            Material::Builder().package(pkg.getData(), pkg.getSize()).build(*engine);
+    ASSERT_NE(sameMaterial, nullptr);
+    EXPECT_EQ(&downcast(sameMaterial)->getDefinition(), &downcast(material)->getDefinition());
+
+    engine->destroy(sameMaterial);
+    engine->destroy(material);
+    Engine::destroy(engine);
+}
+
+INSTANTIATE_TEST_SUITE_P(MaterialInstanceTest, SpecializedInstanceLifetimeTest,
+        testing::Combine(testing::Bool(), testing::Bool()),
+        [](testing::TestParamInfo<std::tuple<bool, bool>> const& info) {
+            return std::string(std::get<0>(info.param) ? "ProgramCache" : "NoProgramCache") +
+                   (std::get<1>(info.param) ? "_Duplicated" : "_Single");
+        });

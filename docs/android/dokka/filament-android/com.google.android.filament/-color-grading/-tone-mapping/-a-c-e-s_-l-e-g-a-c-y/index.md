@@ -11,4 +11,4 @@
 
 ---
 
-ACES tone mapping, with a brightness modifier to match Filament's legacy tone mapper.
+ACES tone mapping, with a brightness modifier to match Filament's legacy tone mapper

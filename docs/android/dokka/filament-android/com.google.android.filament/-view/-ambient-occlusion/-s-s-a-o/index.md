@@ -10,3 +10,5 @@
 ### Deprecated
 
 ---
+
+Basic, sampling SSAO

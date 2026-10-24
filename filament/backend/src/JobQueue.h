@@ -84,6 +84,9 @@ public:
 
     explicit JobQueue(PassKey); // This can be created only via `create()`
 
+    // Debug builds assert that every id issued by `issueJobId()` was pushed or canceled.
+    ~JobQueue();
+
     /**
      * Pushes a new job into queue.
      *
@@ -153,13 +156,20 @@ public:
      */
     void stop() noexcept;
 
+    /**
+     * Checks if the queue has any pending jobs.
+     *
+     * @return true if the queue is empty, false otherwise.
+     */
+    bool empty() const noexcept;
+
 private:
     JobQueue(const JobQueue&) = delete;
     JobQueue& operator=(const JobQueue&) = delete;
 
     JobId genNextJobId() noexcept UTILS_REQUIRES(mQueueMutex);
 
-    utils::Mutex mQueueMutex;
+    mutable utils::Mutex mQueueMutex;
     utils::Condition mQueueCondition;
     std::unordered_map<JobId, Job> mJobsMap UTILS_GUARDED_BY(mQueueMutex);
     std::queue<JobId> mJobOrder UTILS_GUARDED_BY(mQueueMutex);
@@ -181,6 +191,11 @@ public:
      * @param jobCount Max jobs to process (<= 0 for all).
      */
     virtual void process(int jobCount) {}
+
+    /**
+     * Drains pending jobs and waits for currently running work to finish.
+     */
+    virtual void drain() = 0;
 
     /**
      * Terminates the worker.
@@ -228,6 +243,11 @@ public:
     void process(int jobCount) override;
 
     /**
+     * Drains all pending jobs in the queue.
+     */
+    void drain() override;
+
+    /**
      * Signals the queue to stop and drain all pending jobs.
      * This is safe to call multiple times.
      */
@@ -264,6 +284,11 @@ public:
     ThreadWorker(JobQueue::Ptr queue, Config config, PassKey); // This can be created only via `create()`
 
     ~ThreadWorker() override;
+
+    /**
+     * Drains pending jobs and waits for in-flight work to complete.
+     */
+    void drain() override;
 
     /**
      * Signals the queue to stop and joins the worker thread.

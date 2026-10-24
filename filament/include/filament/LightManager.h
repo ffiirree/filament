@@ -23,6 +23,7 @@
 #include <utils/compiler.h>
 #include <utils/Entity.h>
 #include <utils/EntityInstance.h>
+#include <utils/Slice.h>
 
 #include <math/mathfwd.h>
 #include <math/quat.h>
@@ -142,11 +143,26 @@ class FLightManager;
  *    On the other hand, a scene can contain hundreds of non overlapping lights without
  *    incurring a significant overhead.
  *
+ * Instance lifetime
+ * =================
+ *
+ * An Instance is a transient handle: Instances are not stable when a component is added,
+ * removed or gc() is called on a component manager.
+ *
+ * Instances must therefore not be kept across frames. Keep the Entity instead, and call
+ * getInstance() again when needed; it is a fast lookup. Using a stale Instance doesn't crash
+ * but silently accesses the wrong component.
+ *
  */
 class UTILS_PUBLIC LightManager : public FilamentAPI {
     struct BuilderDetails;
 
 public:
+    /**
+     * An Instance representing a light component.
+     * Instances are not stable when a component is added, removed or gc() is called on a
+     * component manager.
+     */
     using Instance = utils::EntityInstance<LightManager>;
 
     /**
@@ -180,6 +196,15 @@ public:
      * Retrieve the Entities of all the components of this manager.
      * @return A list, in no particular order, of all the entities managed by this manager.
      */
+    utils::Slice<const utils::Entity> getAllEntities() const noexcept;
+
+    /**
+     * Retrieve the Entities of all the components of this manager.
+     * @return A list, in no particular order, of all the entities managed by this manager.
+     * @deprecated Use getAllEntities() instead.
+     */
+    UTILS_DEPRECATED
+    UTILS_NOAPIGEN
     utils::Entity const* UTILS_NONNULL getEntities() const noexcept;
 
     /**
@@ -187,6 +212,9 @@ public:
      * @param e An Entity.
      * @return An Instance object, which represents the Light component associated with the Entity e.
      * @note Use Instance::isValid() to make sure the component exists.
+     * @note The returned Instance is transient and must not be kept across frames, see
+     *       "Instance lifetime" above. Instances are not stable when a component is added,
+     *       removed or gc() is called on a component manager.
      * @see hasComponent()
      */
     Instance getInstance(utils::Entity e) const noexcept;
@@ -761,7 +789,7 @@ public:
          *            memory or other resources.
          * @exception utils::PreConditionPanic if a parameter to a builder function was invalid.
          */
-        Result build(Engine& engine, utils::Entity entity);
+        Result build(Engine& engine, utils::Entity entity) const;
 
     private:
         friend class FEngine;

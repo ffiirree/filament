@@ -11,4 +11,4 @@
 
 ---
 
-Tone mapping used to validate/debug scene exposure.
+Tone mapping used to validate/debug scene exposure

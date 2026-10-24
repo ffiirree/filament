@@ -310,6 +310,10 @@ ExtensionSet getDeviceExtensions(VkPhysicalDevice device, bool enableDebugUtils 
 
         VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME,
 
+        VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME,
+        VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME,
+        VK_EXT_COLOR_WRITE_ENABLE_EXTENSION_NAME,
+
 #if FVK_ENABLED(FVK_DEBUG_SHADER_MODULE)
         VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME,
 #endif
@@ -586,6 +590,7 @@ struct VulkanPlatformPrivate {
     uint32_t mGraphicsQueueFamilyIndex = INVALID_VK_INDEX;
     uint32_t mGraphicsQueueIndex = INVALID_VK_INDEX;
     VkQueue mGraphicsQueue = VK_NULL_HANDLE;
+    VkQueue mAsyncQueue = VK_NULL_HANDLE;
     uint32_t mProtectedGraphicsQueueFamilyIndex = INVALID_VK_INDEX;
     uint32_t mProtectedGraphicsQueueIndex = INVALID_VK_INDEX;
     VkQueue mProtectedGraphicsQueue = VK_NULL_HANDLE;
@@ -754,10 +759,13 @@ Driver* VulkanPlatform::createDriver(void* sharedContext,
         requestedFeatures.gpuContextPriority = driverConfig.gpuContextPriority;
     }
 
+    auto queues = getPhysicalDeviceQueueFamilyPropertiesHelper(getPhysicalDevice());
+    const size_t graphicsQueuesCount = queues[mImpl->mGraphicsQueueFamilyIndex].queueCount;
+
     if (mImpl->mDevice == VK_NULL_HANDLE) {
         createLogicalDeviceAndQueues(deviceExts, context.mPhysicalDeviceFeatures.features,
                 context.mPhysicalDeviceVk11Features, context.mProtectedMemorySupported,
-                requestedFeatures);
+                requestedFeatures, graphicsQueuesCount > 1);
     }
 
     assert_invariant(mImpl->mDevice != VK_NULL_HANDLE);
@@ -767,6 +775,12 @@ Driver* VulkanPlatform::createDriver(void* sharedContext,
     vkGetDeviceQueue(mImpl->mDevice, mImpl->mGraphicsQueueFamilyIndex, mImpl->mGraphicsQueueIndex,
             &mImpl->mGraphicsQueue);
     assert_invariant(mImpl->mGraphicsQueue != VK_NULL_HANDLE);
+
+    if (graphicsQueuesCount > 1) {
+        // If we have more than one graphical queue, use one as the async queue
+        vkGetDeviceQueue(mImpl->mDevice, mImpl->mGraphicsQueueFamilyIndex, mImpl->mGraphicsQueueIndex + 1,
+            &mImpl->mAsyncQueue);
+    }
 
     if (context.mProtectedMemorySupported) {
         assert_invariant(mImpl->mProtectedGraphicsQueueFamilyIndex != INVALID_VK_INDEX);
@@ -913,6 +927,10 @@ uint32_t VulkanPlatform::getGraphicsQueueIndex() const noexcept {
 
 VkQueue VulkanPlatform::getGraphicsQueue() const noexcept {
     return mImpl->mGraphicsQueue;
+}
+
+VkQueue VulkanPlatform::getAsyncQueue() const noexcept {
+    return mImpl->mAsyncQueue;
 }
 
 uint32_t VulkanPlatform::getProtectedGraphicsQueueFamilyIndex() const noexcept {
@@ -1080,6 +1098,22 @@ void VulkanPlatform::queryAndSetDeviceFeatures(Platform::DriverConfig const& dri
         chainStruct(&context.mPhysicalDeviceFeatures, &globalPriorityFeatures);
     }
 
+    if (setContains(deviceExts, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME)) {
+        chainStruct(&context.mPhysicalDeviceFeatures, &context.mVertexInputDynamicStateFeatures);
+    }
+
+    if (setContains(deviceExts, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME)) {
+        chainStruct(&context.mPhysicalDeviceFeatures, &context.mExtendedDynamicStateFeatures);
+    }
+
+    if (setContains(deviceExts, VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME)) {
+        chainStruct(&context.mPhysicalDeviceFeatures, &context.mExtendedDynamicState2Features);
+    }
+
+    if (setContains(deviceExts, VK_EXT_COLOR_WRITE_ENABLE_EXTENSION_NAME)) {
+        chainStruct(&context.mPhysicalDeviceFeatures, &context.mColorWriteEnableFeatures);
+    }
+
     if (vkGetPhysicalDeviceProperties2) {
         chainStruct(&context.mPhysicalDeviceProperties, &context.mDriverProperties);
         context.mDriverPropertiesSupported = true;
@@ -1114,8 +1148,6 @@ void VulkanPlatform::queryAndSetDeviceFeatures(Platform::DriverConfig const& dri
                 setContains(deviceExts, VK_EXT_DEBUG_MARKER_EXTENSION_NAME);
         context.mPipelineCreationFeedbackSupported =
                 setContains(deviceExts, VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME);
-        context.mVertexInputDynamicStateSupported =
-                setContains(deviceExts, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
         context.mGlobalPrioritySupported = globalPriorityFeatures.globalPriorityQuery == VK_TRUE;
         context.mGoogleDisplayTimingEnabled =
                 setContains(deviceExts, VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
@@ -1133,6 +1165,10 @@ void VulkanPlatform::queryAndSetDeviceFeatures(Platform::DriverConfig const& dri
     context.mStagingBufferBypassEnabled =
             (driverConfig.featureFlagManager ? driverConfig.featureFlagManager->features.backend.vulkan
                                                        .enable_staging_buffer_bypass
+                                             : false);
+    context.mPipelineDynamicStateEnabled =
+            (driverConfig.featureFlagManager ? driverConfig.featureFlagManager->features.backend
+                                                       .vulkan.enable_pipeline_dynamic_state
                                              : false);
 
     // We know we need to allocate the protected version of the VK objects
@@ -1176,7 +1212,7 @@ void VulkanPlatform::queryAndSetDeviceFeatures(Platform::DriverConfig const& dri
 void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExtensions,
         VkPhysicalDeviceFeatures const& features,
         VkPhysicalDeviceVulkan11Features const& vk11Features, bool createProtectedQueue,
-        MiscDeviceFeatures const& requestedFeatures) noexcept {
+        MiscDeviceFeatures const& requestedFeatures, bool createSecondGraphicsQueue) noexcept {
 
     // Identify and select all the required queues
     mImpl->mGraphicsQueueFamilyIndex =
@@ -1190,7 +1226,7 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
         mImpl->mProtectedGraphicsQueueIndex = 0;
     }
 
-    float queuePriority[] = { 1.0f };
+    float queuePriority[] = { 1.0f, 1.0f };
     VkDeviceCreateInfo deviceCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
     };
@@ -1215,7 +1251,7 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
         .pNext = requiresGpuPriority ? &queuePriorityCreateInfo : nullptr,
         .queueFamilyIndex = mImpl->mGraphicsQueueFamilyIndex,
-        .queueCount = 1,
+        .queueCount = (createSecondGraphicsQueue ? 2u : 1u),
         .pQueuePriorities = &queuePriority[0],
     };
     // Protected queue
@@ -1299,7 +1335,31 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
         chainStruct(&deviceCreateInfo, &globalPriority);
     }
 
+    if (setContains(deviceExtensions, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME)) {
+        chainStruct(&deviceCreateInfo, &mImpl->mContext.mVertexInputDynamicStateFeatures);
+    }
+
+    if (setContains(deviceExtensions, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME)) {
+        chainStruct(&deviceCreateInfo, &mImpl->mContext.mExtendedDynamicStateFeatures);
+    }
+
+    if (setContains(deviceExtensions, VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME)) {
+        chainStruct(&deviceCreateInfo, &mImpl->mContext.mExtendedDynamicState2Features);
+    }
+
+    if (setContains(deviceExtensions, VK_EXT_COLOR_WRITE_ENABLE_EXTENSION_NAME)) {
+        chainStruct(&deviceCreateInfo, &mImpl->mContext.mColorWriteEnableFeatures);
+    }
+
     mImpl->mDevice = createVkDevice(deviceCreateInfo);
+}
+
+bool VulkanPlatform::isPresentationTimeSupported() const noexcept {
+    // VulkanPlatformSurfaceSwapChain::present() forwards the presentation time through
+    // VK_GOOGLE_display_timing, which is the only mechanism the default swapchain implementation
+    // supports. That extension is only ever requested on Android, so this is false everywhere
+    // else.
+    return mImpl->mContext.isGoogleDisplayTimingEnabled();
 }
 
 void VulkanPlatform::setPresentationTime(int64_t presentTime) noexcept {

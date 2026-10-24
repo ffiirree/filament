@@ -3,6 +3,26 @@
 # getInstance
 
 [main]\
-open fun [getInstance](get-instance.md)(entity: [Int](https://kotlinlang.org/api/latest/jvm/stdlib/kotlin-stdlib/kotlin/-int/index.html)): [Int](https://kotlinlang.org/api/latest/jvm/stdlib/kotlin-stdlib/kotlin/-int/index.html)
+open fun [getInstance](get-instance.md)(e: [Int](https://kotlinlang.org/api/latest/jvm/stdlib/kotlin-stdlib/kotlin/-int/index.html)): [Int](https://kotlinlang.org/api/latest/jvm/stdlib/kotlin-stdlib/kotlin/-int/index.html)
 
-Gets a temporary handle that can be used to access the renderable state.
+Gets an Instance representing the renderable component associated with the given Entity. 
+
+Use Instance::isValid() to make sure the component exists.
+
+#### Return
+
+Non-zero handle if the entity has a renderable component, 0 otherwise.
+
+#### Parameters
+
+main
+
+| | |
+|---|---|
+| e | An Entity. |
+
+#### See also
+
+| |
+|---|
+| [hasComponent](has-component.md) |
